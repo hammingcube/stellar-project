@@ -1,0 +1,61 @@
+<head>
+    <title>Welcome</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stellar-sdk/2.0.1/stellar-sdk.min.js"></script>
+</head>
+
+<body>
+    <script>
+        var state = {};
+        window.state = state;
+    </script>
+
+    <script>
+        function update() {
+            const state = window.state;
+            state['accounts'] = []
+        }
+        function createAccount() {
+            const state = window.state;
+            const pair = StellarSdk.Keypair.random();
+            (async function main(state) {
+                try {
+                    const response = await fetch(
+                    `https://friendbot.stellar.org?addr=${encodeURIComponent(pair.publicKey())}`
+                    );
+                    const responseJSON = await response.json();
+                    console.log("SUCCESS! You have a new account :)\n", responseJSON);
+                    state['accounts'].append(key)
+                } catch (e) {
+                    console.error("ERROR!", e);
+                }
+            })(state)
+        }
+        async function checkBalance(pair) {
+            const server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
+
+            // the JS SDK uses promises for most actions, such as retrieving an account
+            const account = await server.loadAccount(pair.publicKey());
+            console.log("Balances for account: " + pair.publicKey());
+            account.balances.forEach(function(balance) {
+            console.log("Type:", balance.asset_type, ", Balance:", balance.balance);
+            });
+        }
+    </script>
+
+    <input type="button" value="Create Account" id="btn_create_account">
+    <input type="button" value="Check Balance" id="btn_check_balance">
+
+
+    <script>
+        document.getElementById('btn_create_account').addEventListener('click', (e) => {
+            console.log('clicked', e.target.value);
+            createAccount();
+        });
+        document.getElementById('btn_check_balance').addEventListener('click', (e) => {
+            console.log('clicked', e.target.value);
+            checkBalance();
+        });
+        console.log("hello");
+        console.log(StellarSdk);
+    </script>
+</body>
