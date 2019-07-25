@@ -2,11 +2,13 @@ const accountUrl = function(pair) {
     return `https://friendbot.stellar.org?addr=${encodeURIComponent(pair.publicKey())}`
 }
 
+
 async function createAccount(pair) {
     const response = await fetch(accountUrl(pair));
     const responseJSON = await response.json();
     return {pair: pair, response: responseJSON}
 }
+
 
 function createKeyPairs(numKeyPairs) {
     var pairs = [];
@@ -17,88 +19,20 @@ function createKeyPairs(numKeyPairs) {
     return pairs;
 }
 
+
 async function createAccounts(numAccounts) {
     pairs = createKeyPairs(numAccounts)
     promises = pairs.map((pair) => createAccount(pair));
     return Promise.all(promises);
 }
 
-async function transferValueSlow(value, srcAccounts, destinationAccounts, channelAccounts) {
-    window._data = {
-        value: value,
-        srcAccounts: srcAccounts,
-        destinationAccounts: destinationAccounts,
-        channelAccounts: channelAccounts,
-    }
-    console.log('value', value)
-    console.log('srcAccounts', srcAccounts.length)
-    console.log('destinationAccounts', destinationAccounts.length)
-    console.log('channelAccounts', channelAccounts.length)
-    theSrcAccount = srcAccounts[0]
-    destinationAccounts.map((account) => showBalances(account.pair))
-    await sendPayment(10, theSrcAccount, destinationAccounts[0])
-    destinationAccounts.map((account) => showBalances(account.pair))
-   
-    // currentBalance = await getBalance(theSrcAccount)
-    // if(currentBalance < value * length(destinationAccounts)) {
-    //     return "insufficient balance";
-    // }
-}
 
-async function transferValueFast(value, srcAccounts, destinationAccounts, channelAccounts) {
-    theSrcAccount = srcAccounts[0]
-    currentBalance = await getBalance(theSrcAccount)
-    if(currentBalance < value * length(destinationAccounts)) {
-        return "insufficient balance";
-    }
-
-    return null
-}
-
-
-// async function viaChannel(baseAccount, customerAddress, amountToSend, channelAccounts, channelIndex, baseAccountKey,) {
-//     StellarSdk.Network.useTestNetwork();
-//     // channelAccounts[] is an array of accountIDs, one for each channel
-//     // channelKeys[] is an array of secret keys, one for each channel
-//     // channelIndex is the channel you want to send this transaction over
-    
-//     // create payment from baseAccount to customerAddress
-//     var transaction =
-//       new StellarSdk.TransactionBuilder(channelAccounts[channelIndex])
-//         .addOperation(StellarSdk.Operation.payment({
-//           source: baseAccount.address(),
-//           destination: customerAddress,
-//           asset: StellarSdk.Asset.native(),
-//           amount: amountToSend
-//         }))
-//         // Wait a maximum of three minutes for the transaction
-//         .setTimeout(180)
-//         .build();
-    
-//       transaction.sign(baseAccountKey);   // base account must sign to approve the payment
-//       transaction.sign(channelKeys[channelIndex]);  // channel must sign to approve it being the source of the transaction
-// }
-
-async function transferValue(value, srcAccounts, destinationAccounts, channelAccounts) {
-    transferValueSlow(value, srcAccounts, destinationAccounts, channelAccounts);
-}
-
-async function showBalances(pair) {
-    const server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
-
-    // the JS SDK uses promises for most actions, such as retrieving an account
-    const account = await server.loadAccount(pair.publicKey());
-    console.log("Balances for account: " + pair.publicKey());
-    account.balances.forEach(function(balance) {
-      console.log("Type:", balance.asset_type, ", Balance:", balance.balance);
-    });
-}
-
-async function sendPayment(value, src, dest) {
+async function sendPayment(value, src, dest, ch, resolve, reject) {
     StellarSdk.Network.useTestNetwork();
     var server = new StellarSdk.Server('https://horizon-testnet.stellar.org');
     var sourceKeys = StellarSdk.Keypair
       .fromSecret(src.pair.secret());
+    var channelKeys = StellarSdk.Keypair.fromSecret(ch.pair.secret());
     var destinationId = dest.pair.publicKey();
     // Transaction will hold a built transaction we can resubmit if the result is unknown.
     var transaction;
@@ -116,9 +50,15 @@ async function sendPayment(value, src, dest) {
         return server.loadAccount(sourceKeys.publicKey());
       })
       .then(function(sourceAccount) {
+        return Promise.all([sourceAccount, server.loadAccount(channelKeys.publicKey())])
+      })
+      .then(function(accounts) {
+        sourceAccount = accounts[0]
+        channelAccount = accounts[1]
         // Start building the transaction.
-        transaction = new StellarSdk.TransactionBuilder(sourceAccount, opts={fee:478})
+        transaction = new StellarSdk.TransactionBuilder(channelAccount, opts={fee:100})
           .addOperation(StellarSdk.Operation.payment({
+            source: sourceAccount.id,
             destination: destinationId,
             // Because Stellar allows transaction in many currencies, you must
             // specify the asset type. The special "native" asset represents Lumens.
@@ -133,30 +73,93 @@ async function sendPayment(value, src, dest) {
           .build();
         // Sign the transaction to prove you are actually the person sending it.
         transaction.sign(sourceKeys);
+        transaction.sign(channelKeys);
         // And finally, send it off to Stellar!
         return server.submitTransaction(transaction);
       })
       .then(function(result) {
         console.log('Success! Results:', result);
+        resolve(result);
       })
       .catch(function(error) {
         console.error('Something went wrong!', error);
+        reject(error);
         // If the result is unknown (no response body, timeout etc.) we simply resubmit
         // already built transaction:
         // server.submitTransaction(transaction);
       });
 }
 
+function sendPaymentPromise(value, src, dest, ch) {
+    var promise = new Promise(async function(resolve, reject) {
+        await sendPayment(value, src, dest, ch, resolve);
+    })
+    return promise;
+}
+
+
+async function getBalance(pair) {
+    const server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
+    const account = await server.loadAccount(pair.publicKey());
+    return [pair.publicKey(), account.balances[0].balance];
+}
+
+
+async function prettyPrint(name, accounts) {
+    promises = accounts.map((account) => getBalance(account.pair))
+    var destBalances = await Promise.all(promises)
+    console.log(`${name} Balances`)
+    console.log(destBalances);
+}
+
+async function printAll(_data) {
+    await prettyPrint('source accounts', _data.srcAccounts);
+    await prettyPrint('destination accounts', _data.destinationAccounts);
+    await prettyPrint('channel accounts', _data.channelAccounts);
+}
+
+async function smartMain(value, _data) {
+    src = _data.srcAccounts[0]
+    channelAccounts = _data.channelAccounts
+    destinationAccounts = _data.destinationAccounts
+
+    var beg = 0;
+    while(beg < destinationAccounts.length) {
+        let promises = channelAccounts.map((ch, i) => {
+            dest = destinationAccounts[i+beg]
+            return sendPaymentPromise(value, src, dest, ch)
+            // console.log(i, ch.pair.publicKey());
+            // console.log(i+beg, dest.pair.publicKey());
+        });
+        console.log('promises', promises)
+        const resolvedPromises = await Promise.all(promises)
+        for(let resolvedPromise of resolvedPromises) {
+            console.log('resolved', resolvedPromise)
+        }
+        beg += channelAccounts.length
+
+    }
+}
+
 async function main() {
-    numDestinationAccounts = 4
-    numChannelAccounts = 2
     numSourceAccounts = 1
+    numChannelAccounts = 2
+    numDestinationAccounts = 4
 
-    destinationAccounts = await createAccounts(numDestinationAccounts)
+    srcAccounts = await createAccounts(numSourceAccounts)
     channelAccounts = await createAccounts(numChannelAccounts)
-    sourceAccounts = await createAccounts(numSourceAccounts)
+    destinationAccounts = await createAccounts(numDestinationAccounts)
 
-    value = 1;
-    result = await transferValue(value, sourceAccounts, destinationAccounts, channelAccounts)
-
+    var _data = {
+        srcAccounts: srcAccounts,
+        channelAccounts: channelAccounts,
+        destinationAccounts: destinationAccounts,
+    }
+    value = 10;
+    console.log('--------------')
+    await printAll(_data)
+    console.log('--------------')
+    await smartMain(value, _data)
+    console.log('--------------')
+    await printAll(_data)
 }
